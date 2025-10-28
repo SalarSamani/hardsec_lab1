@@ -3,4 +3,8 @@
 *.exe
 *.log
 *.pyc
+task1
+task2
+task3
+hist.png
 __pycache__/
