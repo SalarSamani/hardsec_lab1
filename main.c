@@ -19,8 +19,8 @@
 #define HUGETLBFS "/mnt/lab1/buff"
 #define TASK_NOT_IMPLEMENTED -9
 
-#define N_MEASUREMENTS (1 << 18)            // how many probe addresses / samples to collect
-#define ROUNDS_PER_PAIR 100                 // how many timing trials per address pair
+#define N_MEASUREMENTS (100000)              // how many probe addresses / samples to collect
+#define ROUNDS_PER_PAIR 10                   // how many timing trials per address pair
 #define ADDR_ALIGN 64                       // align probes to 64B so we hit cacheline boundaries
 
 
@@ -31,6 +31,9 @@
 */
 size_t time_accesses(char* addr1, char* addr2, size_t rounds) {
     size_t best = SIZE_MAX;  // track the minimum timing we see
+    volatile unsigned long long v1 = *(volatile unsigned long long*)addr1;
+    volatile unsigned long long v2 = *(volatile unsigned long long*)addr2;
+
 
     for (size_t r = 0; r < rounds; r++) {
 
@@ -38,26 +41,15 @@ size_t time_accesses(char* addr1, char* addr2, size_t rounds) {
         clflush(addr1);
         clflush(addr2);
 
-        // Make sure flushes are done before we start the timer
         mfence();
+
+        register uint64_t t0 = rdtscp();
         lfence();
-
-        // Timestamp before the memory accesses
-        uint64_t t0 = rdtsc();
-        lfence(); // serialize rdtsc with following loads
-
-        // Force actual loads from DRAM
-        // volatile prevents compiler from optimizing these loads away
-        volatile unsigned char v1 = *(volatile unsigned char*)addr1;
-        volatile unsigned char v2 = *(volatile unsigned char*)addr2;
 
         (void)v1;
         (void)v2;
 
-        lfence(); // make sure loads have finished
-
-        // Timestamp after
-        uint64_t t1 = rdtsc();
+        uint64_t t1 = rdtscp();
         lfence();
 
         size_t delta = (size_t)(t1 - t0);
@@ -83,6 +75,8 @@ void export_times(char* buff) {
         perror("fopen");
         return;
     }
+
+    const char *user = getenv("USER");
 
     // Prefault / warm the 1GB hugepage so we don't measure page faults later.
     //    We just write one byte per 4KB page.
@@ -117,9 +111,14 @@ void export_times(char* buff) {
         size_t t = time_accesses(base_addr, probe_addr, ROUNDS_PER_PAIR);
 
         // Export in format expected by plotter.py
-        //    NOTE: %p prints the pointer value, %zu prints size_t.
-        // fprintf(stdout, "%p,%p,%zu\n", base_addr, probe_addr, t);
-        fprintf(out, "%p,%p,%zu\n", base_addr, probe_addr, t);
+        // compare using username
+        if (user != NULL && strcmp(user, "sso253") == 0) {
+            /* behaviour for sso253 */
+            fprintf(out, "%p,%p,%zu\n", base_addr, probe_addr, t);
+        } else {
+            /* behaviour for other users */
+            fprintf(stdout, "%p,%p,%zu\n", base_addr, probe_addr, t);
+        }
     }
 }
 
