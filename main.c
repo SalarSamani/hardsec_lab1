@@ -78,6 +78,12 @@ size_t time_accesses(char* addr1, char* addr2, size_t rounds) {
  * */
 void export_times(char* buff) {
 
+    FILE *out = fopen("results.csv", "w");
+    if (!out) {
+        perror("fopen");
+        return;
+    }
+
     // Prefault / warm the 1GB hugepage so we don't measure page faults later.
     //    We just write one byte per 4KB page.
     for (size_t off = 0; off < BUFFER_SIZE; off += 4096) {
@@ -112,7 +118,8 @@ void export_times(char* buff) {
 
         // Export in format expected by plotter.py
         //    NOTE: %p prints the pointer value, %zu prints size_t.
-        fprintf(stdout, "%p,%p,%zu\n", base_addr, probe_addr, t);
+        // fprintf(stdout, "%p,%p,%zu\n", base_addr, probe_addr, t);
+        fprintf(out, "%p,%p,%zu\n", base_addr, probe_addr, t);
     }
 }
 
