@@ -27,7 +27,7 @@
 
 //-----------------------------------------------------------------
 /*
-*   Implement the timing in the following function.  
+*   Implement the timing in the following function.
 *   (It makes it easier for us when grading and debugging)
 */
 
@@ -37,11 +37,11 @@ size_t time_accesses(char *addr1, char *addr2, size_t rounds) {
     uint64_t min_delta = UINT64_MAX;
 
     for (size_t i = 0; i < rounds; i++) {
-        
+
         clflush(addr1);
         clflush(addr2);
         lfence();
-        
+
         uint64_t t0 = rdtscp();
         *(volatile char *)addr1;
         sfence();
@@ -61,7 +61,7 @@ size_t time_accesses(char *addr1, char *addr2, size_t rounds) {
 /*  TASK 1:
  *  You need to perform timing of the different memory accesses and
  *  export them to stdout. Please implement the timing in the
- *  time_accesses function above. 
+ *  time_accesses function above.
  * */
 void export_times(char* buff) {
 
@@ -104,13 +104,11 @@ void export_times(char* buff) {
 //-----------------------------------------------------------------
 /*  TASK 2:
  *  In this function you need to figure out the bank bits as explained
- *  in the manual.  
- *  param: cutoff_val = cutoff value to distinguish between bank 
+ *  in the manual.
+ *  param: cutoff_val = cutoff value to distinguish between bank
  *  hit or conflict.
  * */
-#define MAX_CONFLICTS 10000        // how many conflicting addrs we keep
-#define FIRST_STRIDE  (1UL<<20) // start scanning every 1MB
-#define MIN_STRIDE    (1UL<<12) // stop at 4KB stride
+#define MAX_CONFLICTS 10000 
 
 void find_bank_bits(char* buff, size_t cutoff_val) {
 
@@ -129,8 +127,7 @@ void find_bank_bits(char* buff, size_t cutoff_val) {
         if (probe_addr == base_addr)
             continue;
         size_t t = time_accesses(base_addr, probe_addr, ROUNDS_PER_PAIR);
-        if (t > cutoff_val) {
-            // fprintf(stdout, "Random hit %zu: Addr %p Time %zu\n", n_conflicts, probe_addr, t);
+        if (t > cutoff_val && t < (cutoff_val + 50)) {
             conflict_addrs[n_conflicts++] = probe_addr;
         }
     }
@@ -149,7 +146,7 @@ void find_bank_bits(char* buff, size_t cutoff_val) {
                 if (t > cutoff_val) {
                     conflict_counter[bit]++;
                 }
-                
+
             }
         }
     }
@@ -159,7 +156,7 @@ void find_bank_bits(char* buff, size_t cutoff_val) {
     }
     // determine which bits are bank bits
     for (unsigned bit = 6; bit < 30; bit++) {
-        if (conflict_counter[bit] < (n_conflicts / 5)) {
+        if (conflict_counter[bit] < (n_conflicts / 2)) {
             bitmask |= (1UL << bit);
         }
     }
@@ -175,14 +172,68 @@ void find_bank_bits(char* buff, size_t cutoff_val) {
  *  to figure out a cutoff value to detect bank hits from bank
  *  conflicts.
  * */
+ #define N_TRIALS 25000
+uint64_t num_cycles[80] = {0};
 size_t detect_cutoff(char* buff) {
-    size_t cutoff_val = TASK_NOT_IMPLEMENTED;
 
-/*
- *	__insert code here__
- * */
 
-    return cutoff_val;
+    for (size_t off = 0; off < BUFFER_SIZE; off += 4096) {
+        buff[off] = (char)(off & 0xff);
+    }
+    srand((unsigned int)time(NULL));
+    char* base_addr = buff;
+
+    for (size_t i = 0; i < N_TRIALS; i++) {
+        size_t r_lo = (size_t)rand();
+        size_t r_hi = (size_t)rand();
+        size_t rnd  = (r_hi << 31) ^ r_lo;
+        size_t off  = rnd % (BUFFER_SIZE);
+        off &= ~(ADDR_ALIGN - 1);
+        char* probe_addr = buff + off;
+        size_t t = time_accesses(base_addr, probe_addr, ROUNDS_PER_PAIR);
+
+        ++num_cycles[t / 50];        
+    }
+    printf("Number of cycle for each bucket:\n");
+    for (size_t i = 0; i < 80; i++) {
+        printf("Cycles %3zu - %3zu: Count %lu\n", i*50, i*50+49, num_cycles[i]);
+    }
+    // Find max bucket
+    size_t max_count = 0;
+    size_t max_index = 0;
+    for (size_t i = 0; i < 80; i++) {
+        if (num_cycles[i] > max_count) {
+            max_count = num_cycles[i];
+            max_index = i;
+        }
+    }
+    printf("Max bucket: %zu with count %zu\n", max_index, max_count);
+
+    // Find min after max
+    size_t min_count = SIZE_MAX;
+    size_t min_index = 0;
+    for (size_t i = max_index + 1; i < 80; i++) {
+        if (num_cycles[i] < num_cycles[i + 1]) {
+            min_count = num_cycles[i];
+            min_index = i;
+            break;
+        }
+    }
+    printf("Min after max bucket: %zu with count %zu\n", min_index, min_count);
+
+    // Find the second peak after the min
+    size_t second_peak_count = 0;
+    size_t second_peak_index = 0;
+    for (size_t i = min_index + 1; i < 80; i++) {
+        if (num_cycles[i] > second_peak_count) {
+            second_peak_count = num_cycles[i];
+            second_peak_index = i;
+        }
+    }
+    printf("Second peak after min bucket: %zu with count %zu\n", second_peak_index, second_peak_count);
+    // Cutoff is the middle point between min and second peak
+    size_t cutoff_value = second_peak_index * 50;
+    return cutoff_value;
 }
 
 
@@ -194,14 +245,14 @@ size_t detect_cutoff(char* buff) {
  * implemented in the different functions stubs we provide.
  * */
 int main(int argc, char** argv) {
-	unsigned char* buff;
-	int fd_hugepage;
+        unsigned char* buff;
+        int fd_hugepage;
 
     // allocating a 1GB hugepage
-	fd_hugepage = open(HUGETLBFS, O_CREAT|O_RDWR);
-	assert(fd_hugepage != -1);
-	buff = (unsigned char*) mmap(NULL, BUFFER_SIZE, PROT_READ|PROT_WRITE, MMAP_FLAGS, fd_hugepage, 0 );
-	assert(buff != (void*)-1);
+        fd_hugepage = open(HUGETLBFS, O_CREAT|O_RDWR);
+        assert(fd_hugepage != -1);
+        buff = (unsigned char*) mmap(NULL, BUFFER_SIZE, PROT_READ|PROT_WRITE, MMAP_FLAGS, fd_hugepage, 0 );
+        assert(buff != (void*)-1);
 
 
 #ifdef TASK_1
@@ -234,4 +285,3 @@ int main(int argc, char** argv) {
     close(fd_hugepage);
     return 0;
 }
-
