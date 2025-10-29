@@ -19,8 +19,8 @@
 #define HUGETLBFS "/mnt/lab1/buff"
 #define TASK_NOT_IMPLEMENTED -9
 
-#define N_MEASUREMENTS (10000)              // how many probe addresses / samples to collect
-#define ROUNDS_PER_PAIR 100                   // how many timing trials per address pair
+#define N_MEASUREMENTS (50000)              // how many probe addresses / samples to collect
+#define ROUNDS_PER_PAIR 500                   // how many timing trials per address pair
 #define ADDR_ALIGN 64                       // align probes to 64B so we hit cacheline boundaries
 
 
@@ -55,6 +55,7 @@ size_t time_accesses(char *addr1, char *addr2, size_t rounds) {
         uint64_t t1 = rdtscp();
 
         uint64_t delta = t1 - t0;
+        delta = delta / 3.3;
         if (delta < min_delta) {
             min_delta = delta;
         }
