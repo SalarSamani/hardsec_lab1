@@ -19,15 +19,15 @@ print(f"<= {threshold}: {below}, > {threshold}: {above}")
 print(f"Percentage <= {threshold}: {below / len(times) * 100:.2f}%")
 # -------------------------------------------
 
-# make a table showing counts of times in ranges of 50 cycles and print it
+# make a table showing counts of times in ranges of 25 cycles and print it
 table = {}
 for t in times:
-    bucket = (t // 50) * 50
+    bucket = (t // 25) * 25
     table[bucket] = table.get(bucket, 0) + 1
 print("Time Range (cycles) | Count")
 print("---------------------|-------")
 for k in sorted(table.keys()):
-    print(f"{k:>18} - {k+49:<7} | {table[k]}")  
+    print(f"{k:>19} - {k+24:<7} | {table[k]}")  
 
 nr_bins = (max(times) - min(times) + 50) // 2
 plt.hist(times, bins=nr_bins)
