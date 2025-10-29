@@ -19,48 +19,49 @@
 #define HUGETLBFS "/mnt/lab1/buff"
 #define TASK_NOT_IMPLEMENTED -9
 
-#define N_MEASUREMENTS (100000)              // how many probe addresses / samples to collect
-#define ROUNDS_PER_PAIR 10                   // how many timing trials per address pair
+#define N_MEASUREMENTS (10000)              // how many probe addresses / samples to collect
+#define ROUNDS_PER_PAIR 100                   // how many timing trials per address pair
 #define ADDR_ALIGN 64                       // align probes to 64B so we hit cacheline boundaries
+
 
 
 //-----------------------------------------------------------------
 /*
 *   Implement the timing in the following function.  
-*   (It makes it easier for us when grading and debugging) 
+*   (It makes it easier for us when grading and debugging)
 */
-size_t time_accesses(char* addr1, char* addr2, size_t rounds) {
-    size_t best = SIZE_MAX;  // track the minimum timing we see
-    volatile unsigned long long v1 = *(volatile unsigned long long*)addr1;
-    volatile unsigned long long v2 = *(volatile unsigned long long*)addr2;
+
+static inline __attribute__((always_inline)) void maccess(void* p) {
+    asm volatile("movq (%0), %%rax\n"
+                 :
+                 : "r"(p)
+                 : "rax");
+}
 
 
-    for (size_t r = 0; r < rounds; r++) {
+size_t time_accesses(char *addr1, char *addr2, size_t rounds) {
 
-        // Evict both addresses from all cache levels
+    uint64_t min_delta = UINT64_MAX;
+
+    for (size_t i = 0; i < rounds; i++) {
+        
         clflush(addr1);
         clflush(addr2);
-
-        mfence();
-
-        register uint64_t t0 = rdtscp();
         lfence();
-
-        (void)v1;
-        (void)v2;
-
+        
+        uint64_t t0 = rdtscp();
+        *(volatile char *)addr1;
+        *(volatile char *)addr2;
         uint64_t t1 = rdtscp();
-        lfence();
 
-        size_t delta = (size_t)(t1 - t0);
-
-        if (delta < best) {
-            best = delta;
+        uint64_t delta = t1 - t0;
+        if (delta < min_delta) {
+            min_delta = delta;
         }
     }
-
-    return best;
+    return min_delta;
 }
+
 
 //-----------------------------------------------------------------
 /*  TASK 1:
@@ -78,49 +79,31 @@ void export_times(char* buff) {
 
     const char *user = getenv("USER");
 
-    // Prefault / warm the 1GB hugepage so we don't measure page faults later.
-    //    We just write one byte per 4KB page.
     for (size_t off = 0; off < BUFFER_SIZE; off += 4096) {
         buff[off] = (char)(off & 0xff);
     }
-
-    // Seed RNG (not crypto, just spreading probes around the 1GB region)
     srand((unsigned int)time(NULL));
-
-    // Choose one fixed base address.
-    //    You can pick buff itself, or some offset; doesn't really matter.
     char* base_addr = buff;
 
-    // Collect a bunch of measurements.
     for (size_t i = 0; i < N_MEASUREMENTS; i++) {
 
-        // Generate a "random" offset in [0, BUFFER_SIZE)
-        // We can't just do rand() % BUFFER_SIZE because rand() is only 31 bits.
-        // Mix two rand() calls to get more entropy.
         size_t r_lo = (size_t)rand();
         size_t r_hi = (size_t)rand();
-        size_t rnd  = (r_hi << 31) ^ r_lo;  // simple mash-up
-        size_t off  = rnd % (BUFFER_SIZE - ADDR_ALIGN);
+        size_t rnd  = (r_hi << 31) ^ r_lo;
+        size_t off  = rnd % (BUFFER_SIZE);
 
-        // Align to 64B boundary to reduce noise from sub-line effects
         off &= ~(ADDR_ALIGN - 1);
-
         char* probe_addr = buff + off;
-
-        // Measure timing for base_addr <-> probe_addr
         size_t t = time_accesses(base_addr, probe_addr, ROUNDS_PER_PAIR);
 
-        // Export in format expected by plotter.py
-        // compare using username
         if (user != NULL && strcmp(user, "sso253") == 0) {
-            /* behaviour for sso253 */
             fprintf(out, "%p,%p,%zu\n", base_addr, probe_addr, t);
         } else {
-            /* behaviour for other users */
             fprintf(stdout, "%p,%p,%zu\n", base_addr, probe_addr, t);
         }
     }
 }
+
 
 
 
