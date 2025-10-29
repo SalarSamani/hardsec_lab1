@@ -10,18 +10,18 @@
 #include <x86intrin.h>
 #include "asm.h"
 
-#include <time.h>     // for srand()/rand()
-#include <limits.h>   // for SIZE_MAX
-#include <stdint.h>   // for uint64_t
+#include <time.h>
+#include <limits.h>
+#include <stdint.h>
 
 #define BUFFER_SIZE (1ULL<<30)
 #define MMAP_FLAGS (MAP_ANONYMOUS|MAP_PRIVATE|MAP_POPULATE|MAP_HUGETLB|(30<<MAP_HUGE_SHIFT))
 #define HUGETLBFS "/mnt/lab1/buff"
 #define TASK_NOT_IMPLEMENTED -9
 
-#define N_MEASUREMENTS (50000)              // how many probe addresses / samples to collect
-#define ROUNDS_PER_PAIR 500                   // how many timing trials per address pair
-#define ADDR_ALIGN 64                       // align probes to 64B so we hit cacheline boundaries
+#define N_MEASUREMENTS (100000)
+#define ROUNDS_PER_PAIR 50
+#define ADDR_ALIGN 64
 
 
 
@@ -30,13 +30,6 @@
 *   Implement the timing in the following function.  
 *   (It makes it easier for us when grading and debugging)
 */
-
-static inline __attribute__((always_inline)) void maccess(void* p) {
-    asm volatile("movq (%0), %%rax\n"
-                 :
-                 : "r"(p)
-                 : "rax");
-}
 
 
 size_t time_accesses(char *addr1, char *addr2, size_t rounds) {
@@ -51,11 +44,11 @@ size_t time_accesses(char *addr1, char *addr2, size_t rounds) {
         
         uint64_t t0 = rdtscp();
         *(volatile char *)addr1;
+        sfence();
         *(volatile char *)addr2;
         uint64_t t1 = rdtscp();
 
         uint64_t delta = t1 - t0;
-        delta = delta / 3.3;
         if (delta < min_delta) {
             min_delta = delta;
         }
@@ -115,16 +108,64 @@ void export_times(char* buff) {
  *  param: cutoff_val = cutoff value to distinguish between bank 
  *  hit or conflict.
  * */
+#define MAX_CONFLICTS 10000        // how many conflicting addrs we keep
+#define FIRST_STRIDE  (1UL<<20) // start scanning every 1MB
+#define MIN_STRIDE    (1UL<<12) // stop at 4KB stride
+
 void find_bank_bits(char* buff, size_t cutoff_val) {
 
-/*
- *	__insert code here__
- * */
+    for (size_t off = 0; off < BUFFER_SIZE; off += 4096) {
+        buff[off] = (char)(off & 0xff);
+    }
 
- //  export the bitmask of all the BANK bits in the following format:
- //  fprintf(stdout, "0x%lx\n",bitmask);
+    char *base_addr = buff;
+    char *conflict_addrs[MAX_CONFLICTS];
+    size_t n_conflicts = 0;
 
+    srand(time(NULL));
+    while (n_conflicts < MAX_CONFLICTS) {
+        size_t off = ((size_t)rand() % (BUFFER_SIZE / 4096)) * 4096;
+        char *probe_addr = buff + off;
+        if (probe_addr == base_addr)
+            continue;
+        size_t t = time_accesses(base_addr, probe_addr, ROUNDS_PER_PAIR);
+        if (t > cutoff_val) {
+            // fprintf(stdout, "Random hit %zu: Addr %p Time %zu\n", n_conflicts, probe_addr, t);
+            conflict_addrs[n_conflicts++] = probe_addr;
+        }
+    }
+
+    unsigned long bitmask = 0UL;
+    uint64_t conflict_counter[30] = {0};
+
+    if (n_conflicts > 0) {
+        for (size_t i = 0; i < n_conflicts; i++) {
+            for (unsigned bit = 0; bit < 30; bit++) {
+                size_t stride = 1UL << bit;
+                char *test_addr = (char*)((size_t)conflict_addrs[i] ^ stride);
+                if (test_addr >= buff + BUFFER_SIZE)
+                    continue;
+                size_t t = time_accesses(base_addr, test_addr, ROUNDS_PER_PAIR);
+                if (t > cutoff_val) {
+                    conflict_counter[bit]++;
+                }
+                
+            }
+        }
+    }
+    // print conflict_counter
+    for (unsigned bit = 0; bit < 30; bit++) {
+        fprintf(stdout, "Bit %u: Conflicts %lu\n", bit, conflict_counter[bit]);
+    }
+    // determine which bits are bank bits
+    for (unsigned bit = 6; bit < 30; bit++) {
+        if (conflict_counter[bit] < (n_conflicts / 5)) {
+            bitmask |= (1UL << bit);
+        }
+    }
+    fprintf(stdout, "0x%lx\n", bitmask);
 }
+
 
 
 //-----------------------------------------------------------------
