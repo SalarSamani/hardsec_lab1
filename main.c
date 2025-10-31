@@ -63,36 +63,32 @@ void export_times(char* buff) {
  *  hit or conflict.
  * */
  //-----------------------------------------------------------------
-#define CANDIDATES 4096
-
-static inline char* random_line(char* base){
-    size_t off = ((size_t)rand() % (BUFFER_SIZE / CACHELINE)) * CACHELINE;
-    return base + off;
-}
-
-static char* find_conflict_addr(char* base, size_t limit){
-    for(;;){
-        char* best_a = NULL;
-        size_t best_t = 0;
-        for(size_t i=0;i<CANDIDATES;i++){
-            char* a = random_line(base);
-            size_t t = time_accesses(base, a, ROUNDS);
-            if(t > best_t){ best_t = t; best_a = a; }
-        }
-        if(best_t > limit) return best_a;
-    }
-}
+#define CANDIDATES 128
 
 void find_bank_bits(char* buf, size_t limit){
     char* base = buf;
-    char* conflict = find_conflict_addr(base, limit);
+    char* conflict = NULL;
+    size_t best_t = 0;
+
+    while (1) {
+        best_t = 0; conflict = NULL;
+        for (size_t i = 0; i < CANDIDATES; i++) {
+            size_t off = ((size_t)rand() % (BUFFER_SIZE / CACHELINE)) * CACHELINE;
+            char* a = base + off;
+            size_t t = time_accesses(base, a, ROUNDS);
+            if (t > best_t) { best_t = t; conflict = a; }
+        }
+        if (best_t > limit) break;
+    }
+
     unsigned long mask = 0;
-    for(size_t b=6;b<30;b++){
-        char* test = (char*)((uintptr_t)conflict ^ (1ULL<<b));
-        if(time_accesses(base, test, ROUNDS) < limit) mask |= (1ULL<<b);
+    for (size_t b = 6; b < 30; b++) {
+        char* test = (char*)((uintptr_t)conflict ^ (1ULL << b));
+        if (time_accesses(base, test, ROUNDS) < limit) mask |= (1ULL << b);
     }
     printf("0x%lx\n", mask);
 }
+
 
 
 //-----------------------------------------------------------------
