@@ -37,14 +37,13 @@ size_t time_accesses(char *addr1, char *addr2, size_t rounds) {
     uint64_t min_delta = UINT64_MAX;
 
     for (size_t i = 0; i < rounds; i++) {
-
         clflush(addr1);
         clflush(addr2);
         lfence();
 
         uint64_t t0 = rdtscp();
         *(volatile char *)addr1;
-        sfence();
+        // sfence();
         *(volatile char *)addr2;
         uint64_t t1 = rdtscp();
 
@@ -155,8 +154,8 @@ void find_bank_bits(char* buff, size_t cutoff_val) {
         fprintf(stdout, "Bit %u: Conflicts %lu\n", bit, conflict_counter[bit]);
     }
     // determine which bits are bank bits
-    for (unsigned bit = 6; bit < 30; bit++) {
-        if (conflict_counter[bit] < (n_conflicts / 2)) {
+    for (unsigned bit = 0; bit < 30; bit++) {
+        if (conflict_counter[bit] < (2500)) {
             bitmask |= (1UL << bit);
         }
     }
@@ -194,10 +193,10 @@ size_t detect_cutoff(char* buff) {
 
         ++num_cycles[t / 50];        
     }
-    printf("Number of cycle for each bucket:\n");
-    for (size_t i = 0; i < 80; i++) {
-        printf("Cycles %3zu - %3zu: Count %lu\n", i*50, i*50+49, num_cycles[i]);
-    }
+    // printf("Number of cycle for each bucket:\n");
+    // for (size_t i = 0; i < 80; i++) {
+    //     printf("Cycles %3zu - %3zu: Count %lu\n", i*50, i*50+49, num_cycles[i]);
+    // }
     // Find max bucket
     size_t max_count = 0;
     size_t max_index = 0;
@@ -207,7 +206,7 @@ size_t detect_cutoff(char* buff) {
             max_index = i;
         }
     }
-    printf("Max bucket: %zu with count %zu\n", max_index, max_count);
+    // printf("Max bucket: %zu with count %zu\n", max_index, max_count);
 
     // Find min after max
     size_t min_count = SIZE_MAX;
@@ -219,7 +218,7 @@ size_t detect_cutoff(char* buff) {
             break;
         }
     }
-    printf("Min after max bucket: %zu with count %zu\n", min_index, min_count);
+    // printf("Min after max bucket: %zu with count %zu\n", min_index, min_count);
 
     // Find the second peak after the min
     size_t second_peak_count = 0;
@@ -230,8 +229,8 @@ size_t detect_cutoff(char* buff) {
             second_peak_index = i;
         }
     }
-    printf("Second peak after min bucket: %zu with count %zu\n", second_peak_index, second_peak_count);
-    // Cutoff is the middle point between min and second peak
+    // printf("Second peak after min bucket: %zu with count %zu\n", second_peak_index, second_peak_count);
+    // // Cutoff is the middle point between min and second peak
     size_t cutoff_value = second_peak_index * 50;
     return cutoff_value;
 }
