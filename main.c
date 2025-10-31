@@ -10,44 +10,30 @@
 #include <x86intrin.h>
 #include "asm.h"
 
-#include <time.h>
-#include <limits.h>
-#include <stdint.h>
-
 #define BUFFER_SIZE (1ULL<<30)
 #define MMAP_FLAGS (MAP_ANONYMOUS|MAP_PRIVATE|MAP_POPULATE|MAP_HUGETLB|(30<<MAP_HUGE_SHIFT))
 #define HUGETLBFS "/mnt/lab1/buff"
 #define TASK_NOT_IMPLEMENTED -9
 
-#define N_MEASUREMENTS (100000)
-#define ROUNDS_PER_PAIR 50
-#define ADDR_ALIGN 64
-
-
 
 //-----------------------------------------------------------------
 /*
-*   Implement the timing in the following function.
-*   (It makes it easier for us when grading and debugging)
+*   Implement the timing in the following function.  
+*   (It makes it easier for us when grading and debugging) 
 */
-
-
-size_t time_accesses(char *addr1, char *addr2, size_t rounds) {
-
-    uint64_t min_delta = UINT64_MAX;
-
+size_t time_accesses(char* addr1, char* addr2, size_t rounds) {
+    size_t delta = 0;
+    size_t min_delta = ~0;
     for (size_t i = 0; i < rounds; i++) {
         clflush(addr1);
-        clflush(addr2);
+        clflush(addr2);     
         lfence();
-
-        uint64_t t0 = rdtscp();
-        *(volatile char *)addr1;
-        // sfence();
-        *(volatile char *)addr2;
+        cpuid();
         uint64_t t1 = rdtscp();
-
-        uint64_t delta = t1 - t0;
+        *(volatile char*)addr1;
+        *(volatile char*)addr2;
+        uint64_t t2 = rdtscp();
+        delta = t2 - t1;
         if (delta < min_delta) {
             min_delta = delta;
         }
@@ -56,186 +42,138 @@ size_t time_accesses(char *addr1, char *addr2, size_t rounds) {
 }
 
 
-//-----------------------------------------------------------------
-/*  TASK 1:
- *  You need to perform timing of the different memory accesses and
- *  export them to stdout. Please implement the timing in the
- *  time_accesses function above.
- * */
+#define CACHELINE       64
+#define ROUNDS          100
+#define TOTAL_PROBES    20000
+
 void export_times(char* buff) {
-
-    FILE *out = fopen("results.csv", "w");
-    if (!out) {
-        perror("fopen");
-        return;
-    }
-
-    const char *user = getenv("USER");
-
-    for (size_t off = 0; off < BUFFER_SIZE; off += 4096) {
-        buff[off] = (char)(off & 0xff);
-    }
-    srand((unsigned int)time(NULL));
-    char* base_addr = buff;
-
-    for (size_t i = 0; i < N_MEASUREMENTS; i++) {
-
-        size_t r_lo = (size_t)rand();
-        size_t r_hi = (size_t)rand();
-        size_t rnd  = (r_hi << 31) ^ r_lo;
-        size_t off  = rnd % (BUFFER_SIZE);
-
-        off &= ~(ADDR_ALIGN - 1);
-        char* probe_addr = buff + off;
-        size_t t = time_accesses(base_addr, probe_addr, ROUNDS_PER_PAIR);
-
-        if (user != NULL && strcmp(user, "sso253") == 0) {
-            fprintf(out, "%p,%p,%zu\n", base_addr, probe_addr, t);
-        } else {
-            fprintf(stdout, "%p,%p,%zu\n", base_addr, probe_addr, t);
-        }
+    for (size_t i = 0; i < TOTAL_PROBES; i++) {
+        size_t offset = ((size_t)rand() % (BUFFER_SIZE / CACHELINE)) * CACHELINE;
+        char* pair = buff + offset;
+        size_t time = time_accesses(buff, pair, ROUNDS);
+        fprintf(stdout, "%p,%p,%zu\n", buff, pair, time);
     }
 }
-
-
-
 
 //-----------------------------------------------------------------
 /*  TASK 2:
  *  In this function you need to figure out the bank bits as explained
- *  in the manual.
- *  param: cutoff_val = cutoff value to distinguish between bank
+ *  in the manual.  
+ *  param: cutoff_val = cutoff value to distinguish between bank 
  *  hit or conflict.
  * */
-#define MAX_CONFLICTS 10000 
-
+ //-----------------------------------------------------------------
+#include <time.h>
 void find_bank_bits(char* buff, size_t cutoff_val) {
-
-    for (size_t off = 0; off < BUFFER_SIZE; off += 4096) {
-        buff[off] = (char)(off & 0xff);
-    }
-
-    char *base_addr = buff;
-    char *conflict_addrs[MAX_CONFLICTS];
-    size_t n_conflicts = 0;
-
+    size_t offset;
+    char *conflict, *test;
+    size_t t;
+    size_t mask = 0;
+    
     srand(time(NULL));
-    while (n_conflicts < MAX_CONFLICTS) {
-        size_t off = ((size_t)rand() % (BUFFER_SIZE / 4096)) * 4096;
-        char *probe_addr = buff + off;
-        if (probe_addr == base_addr)
-            continue;
-        size_t t = time_accesses(base_addr, probe_addr, ROUNDS_PER_PAIR);
-        if (t > cutoff_val && t < (cutoff_val + 50)) {
-            conflict_addrs[n_conflicts++] = probe_addr;
-        }
+    while (1) {
+        offset = ((size_t)(rand()) % (BUFFER_SIZE));
+        conflict = buff + offset;
+        t = time_accesses(buff, test, ROUNDS);
+        printf("*****\n");
+        if (t > cutoff_val) break;        
     }
-
-    unsigned long bitmask = 0UL;
-    uint64_t conflict_counter[30] = {0};
-
-    if (n_conflicts > 0) {
-        for (size_t i = 0; i < n_conflicts; i++) {
-            for (unsigned bit = 0; bit < 30; bit++) {
-                size_t stride = 1UL << bit;
-                char *test_addr = (char*)((size_t)conflict_addrs[i] ^ stride);
-                if (test_addr >= buff + BUFFER_SIZE)
-                    continue;
-                size_t t = time_accesses(base_addr, test_addr, ROUNDS_PER_PAIR);
-                if (t > cutoff_val) {
-                    conflict_counter[bit]++;
-                }
-
-            }
-        }
+    for (size_t i = 6; i < 30; i++) {
+        size_t test_bit = (1ULL << i);
+        char* test = (char*)((size_t)conflict ^ test_bit);
+        size_t t = time_accesses(buff, test, ROUNDS);
+        if (t < cutoff_val) mask |= (1ULL << i);
     }
-    // print conflict_counter
-    for (unsigned bit = 0; bit < 30; bit++) {
-        fprintf(stdout, "Bit %u: Conflicts %lu\n", bit, conflict_counter[bit]);
-    }
-    // determine which bits are bank bits
-    for (unsigned bit = 0; bit < 30; bit++) {
-        if (conflict_counter[bit] < (2500)) {
-            bitmask |= (1UL << bit);
-        }
-    }
-    fprintf(stdout, "0x%lx\n", bitmask);
+    printf("0x%lx\n", mask);
 }
-
-
 
 //-----------------------------------------------------------------
 /*  TASK 3:
- *  You can reuse the same code as the one for task 1 to collect
+*  You can reuse the same code as the one for task 1 to collect
  *  measurements. On top of that after collecting the times you need
  *  to figure out a cutoff value to detect bank hits from bank
  *  conflicts.
  * */
- #define N_TRIALS 25000
-uint64_t num_cycles[80] = {0};
 size_t detect_cutoff(char* buff) {
+    size_t cutoff_val = TASK_NOT_IMPLEMENTED;
 
+/*
+ *	__insert code here__
+ * */
+    struct Data
+    {
+        char* base_addr;
+        char* probe_addr;
+        size_t time;
+    };
 
-    for (size_t off = 0; off < BUFFER_SIZE; off += 4096) {
-        buff[off] = (char)(off & 0xff);
+    char* base_addr = buff; // Always the same base
+    size_t rounds = 200; // TODO: How many rounds?
+    size_t total_probes = 20000; // TODO: How many probes?
+    struct Data dataset[total_probes];
+
+    for (size_t i = 0; i < total_probes; i++) {
+        size_t offset = (rand() % (BUFFER_SIZE / 64)) * 64; // 64B cacheline // TODO: DRAMA uses 128?
+        char* probe_addr = base_addr + offset;
+
+        size_t time = time_accesses(base_addr, probe_addr, rounds);
+
+        struct Data data = {base_addr, probe_addr, time};
+        dataset[i] = data;
     }
-    srand((unsigned int)time(NULL));
-    char* base_addr = buff;
 
-    for (size_t i = 0; i < N_TRIALS; i++) {
-        size_t r_lo = (size_t)rand();
-        size_t r_hi = (size_t)rand();
-        size_t rnd  = (r_hi << 31) ^ r_lo;
-        size_t off  = rnd % (BUFFER_SIZE);
-        off &= ~(ADDR_ALIGN - 1);
-        char* probe_addr = buff + off;
-        size_t t = time_accesses(base_addr, probe_addr, ROUNDS_PER_PAIR);
+    // K-means alg to find 2 clusters
+    double centroids[2];
+    int* labels = calloc(total_probes, sizeof(int));
 
-        ++num_cycles[t / 50];        
+    // Select min and max for initial centroids 
+    centroids[0] = dataset[0].time;
+    centroids[1] = dataset[0].time;
+    for (int i = 1; i < total_probes; i++) {
+        if (dataset[i].time < centroids[0]) centroids[0] = dataset[i].time;
+        if (dataset[i].time > centroids[1]) centroids[1] = dataset[i].time;
     }
-    // printf("Number of cycle for each bucket:\n");
-    // for (size_t i = 0; i < 80; i++) {
-    //     printf("Cycles %3zu - %3zu: Count %lu\n", i*50, i*50+49, num_cycles[i]);
-    // }
-    // Find max bucket
-    size_t max_count = 0;
-    size_t max_index = 0;
-    for (size_t i = 0; i < 80; i++) {
-        if (num_cycles[i] > max_count) {
-            max_count = num_cycles[i];
-            max_index = i;
+
+    for (int i = 0; i < 100; i++) {
+        int label_changed = 0;
+
+        // Assign points to the closest centroid
+        for (int j = 0; j < total_probes; j++) {
+            double dist0 = dataset[j].time - centroids[0];
+            if (dist0 < 0) dist0 = -dist0;
+            double dist1 = dataset[j].time - centroids[1];
+            if (dist1 < 0) dist1 = -dist1;
+            int new_label = (dist0 < dist1) ? 0 : 1;
+
+            if (labels[j] != new_label) {
+                labels[j] = new_label;
+                label_changed = 1;
+            }
+        }
+
+        // If no label changed, it is done
+        if (!label_changed) break;
+
+        // Calculate centroids
+        size_t sum[2] = {0, 0};
+        int count[2] = {0, 0};
+        for (int j = 0; j < total_probes; j++) {
+            sum[labels[j]] += dataset[j].time;
+            count[labels[j]]++;
+        }
+
+        for (int j = 0; j < 2; j++) {
+            if (count[j] > 0)
+                centroids[j] = sum[j] / count[j];
         }
     }
-    // printf("Max bucket: %zu with count %zu\n", max_index, max_count);
 
-    // Find min after max
-    size_t min_count = SIZE_MAX;
-    size_t min_index = 0;
-    for (size_t i = max_index + 1; i < 80; i++) {
-        if (num_cycles[i] < num_cycles[i + 1]) {
-            min_count = num_cycles[i];
-            min_index = i;
-            break;
-        }
-    }
-    // printf("Min after max bucket: %zu with count %zu\n", min_index, min_count);
+    cutoff_val = (centroids[0] + centroids[1]) / 2; // Middle point of the cluster centers
 
-    // Find the second peak after the min
-    size_t second_peak_count = 0;
-    size_t second_peak_index = 0;
-    for (size_t i = min_index + 1; i < 80; i++) {
-        if (num_cycles[i] > second_peak_count) {
-            second_peak_count = num_cycles[i];
-            second_peak_index = i;
-        }
-    }
-    // printf("Second peak after min bucket: %zu with count %zu\n", second_peak_index, second_peak_count);
-    // // Cutoff is the middle point between min and second peak
-    size_t cutoff_value = second_peak_index * 50;
-    return cutoff_value;
+    free(labels);
+    
+    return cutoff_val;
 }
-
-
 
 
 //-----------------------------------------------------------------
@@ -244,14 +182,14 @@ size_t detect_cutoff(char* buff) {
  * implemented in the different functions stubs we provide.
  * */
 int main(int argc, char** argv) {
-        unsigned char* buff;
-        int fd_hugepage;
+	unsigned char* buff;
+	int fd_hugepage;
 
     // allocating a 1GB hugepage
-        fd_hugepage = open(HUGETLBFS, O_CREAT|O_RDWR);
-        assert(fd_hugepage != -1);
-        buff = (unsigned char*) mmap(NULL, BUFFER_SIZE, PROT_READ|PROT_WRITE, MMAP_FLAGS, fd_hugepage, 0 );
-        assert(buff != (void*)-1);
+	fd_hugepage = open(HUGETLBFS, O_CREAT|O_RDWR);
+	assert(fd_hugepage != -1);
+	buff = (unsigned char*) mmap(NULL, BUFFER_SIZE, PROT_READ|PROT_WRITE, MMAP_FLAGS, fd_hugepage, 0 );
+	assert(buff != (void*)-1);
 
 
 #ifdef TASK_1
@@ -284,3 +222,4 @@ int main(int argc, char** argv) {
     close(fd_hugepage);
     return 0;
 }
+
