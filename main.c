@@ -63,29 +63,23 @@ void export_times(char* buff) {
  *  hit or conflict.
  * */
  //-----------------------------------------------------------------
-#include <time.h>
-void find_bank_bits(char* buff, size_t cutoff_val) {
-    size_t offset;
-    char *conflict, *test;
-    size_t t;
-    size_t mask = 0;
-    
-    srand(time(NULL));
-    while (1) {
-        offset = ((size_t)(rand()) % (BUFFER_SIZE));
-        conflict = buff + offset;
-        t = time_accesses(buff, test, ROUNDS);
-        printf("*****\n");
-        if (t > cutoff_val) break;        
-    }
-    for (size_t i = 6; i < 30; i++) {
-        size_t test_bit = (1ULL << i);
-        char* test = (char*)((size_t)conflict ^ test_bit);
-        size_t t = time_accesses(buff, test, ROUNDS);
-        if (t < cutoff_val) mask |= (1ULL << i);
+#define OFFSET_SHIFT 24
+
+static inline char* pick_seed(char* base){
+    return base + ((((size_t)rand()) << OFFSET_SHIFT) & (BUFFER_SIZE - 1));
+}
+
+void find_bank_bits(char* buf, size_t limit){
+    char* base = buf;
+    char* conflict = pick_seed(base);
+    unsigned long mask = 0;
+    for(size_t b=6;b<30;b++){
+        char* test = (char*)((uintptr_t)conflict ^ (1ULL<<b));
+        if(time_accesses(base, test, ROUNDS) < limit) mask |= (1ULL<<b);
     }
     printf("0x%lx\n", mask);
 }
+
 
 //-----------------------------------------------------------------
 /*  TASK 3:
@@ -94,86 +88,56 @@ void find_bank_bits(char* buff, size_t cutoff_val) {
  *  to figure out a cutoff value to detect bank hits from bank
  *  conflicts.
  * */
-size_t detect_cutoff(char* buff) {
-    size_t cutoff_val = TASK_NOT_IMPLEMENTED;
+#define SAMPLES 20000
+#define NUM_BINS 512
 
-/*
- *	__insert code here__
- * */
-    struct Data
-    {
-        char* base_addr;
-        char* probe_addr;
-        size_t time;
-    };
-
-    char* base_addr = buff; // Always the same base
-    size_t rounds = 200; // TODO: How many rounds?
-    size_t total_probes = 20000; // TODO: How many probes?
-    struct Data dataset[total_probes];
-
-    for (size_t i = 0; i < total_probes; i++) {
-        size_t offset = (rand() % (BUFFER_SIZE / 64)) * 64; // 64B cacheline // TODO: DRAMA uses 128?
-        char* probe_addr = base_addr + offset;
-
-        size_t time = time_accesses(base_addr, probe_addr, rounds);
-
-        struct Data data = {base_addr, probe_addr, time};
-        dataset[i] = data;
+size_t detect_cutoff(char* buf){
+    size_t times[SAMPLES];
+    for(size_t i=0;i<SAMPLES;i++){
+        size_t off = ((size_t)rand() % (BUFFER_SIZE/CACHELINE)) * CACHELINE;
+        times[i] = time_accesses(buf, buf+off, ROUNDS);
     }
 
-    // K-means alg to find 2 clusters
-    double centroids[2];
-    int* labels = calloc(total_probes, sizeof(int));
+    size_t min_t = times[0], max_t = times[0];
+    for(size_t i=1;i<SAMPLES;i++){
+        if(times[i] < min_t) min_t = times[i];
+        if(times[i] > max_t) max_t = times[i];
+    }
+    if(min_t == max_t) return min_t;
 
-    // Select min and max for initial centroids 
-    centroids[0] = dataset[0].time;
-    centroids[1] = dataset[0].time;
-    for (int i = 1; i < total_probes; i++) {
-        if (dataset[i].time < centroids[0]) centroids[0] = dataset[i].time;
-        if (dataset[i].time > centroids[1]) centroids[1] = dataset[i].time;
+    double bin_width = (double)(max_t - min_t) / NUM_BINS;
+    size_t hist[NUM_BINS] = {0};
+    for(size_t i=0;i<SAMPLES;i++){
+        size_t b = (size_t)((times[i]-min_t)/bin_width);
+        if(b >= NUM_BINS) b = NUM_BINS-1;
+        hist[b]++;
     }
 
-    for (int i = 0; i < 100; i++) {
-        int label_changed = 0;
-
-        // Assign points to the closest centroid
-        for (int j = 0; j < total_probes; j++) {
-            double dist0 = dataset[j].time - centroids[0];
-            if (dist0 < 0) dist0 = -dist0;
-            double dist1 = dataset[j].time - centroids[1];
-            if (dist1 < 0) dist1 = -dist1;
-            int new_label = (dist0 < dist1) ? 0 : 1;
-
-            if (labels[j] != new_label) {
-                labels[j] = new_label;
-                label_changed = 1;
-            }
-        }
-
-        // If no label changed, it is done
-        if (!label_changed) break;
-
-        // Calculate centroids
-        size_t sum[2] = {0, 0};
-        int count[2] = {0, 0};
-        for (int j = 0; j < total_probes; j++) {
-            sum[labels[j]] += dataset[j].time;
-            count[labels[j]]++;
-        }
-
-        for (int j = 0; j < 2; j++) {
-            if (count[j] > 0)
-                centroids[j] = sum[j] / count[j];
-        }
+    double total_w = 0, total_sum = 0;
+    for(size_t b=0;b<NUM_BINS;b++){
+        double center = min_t + (b+0.5)*bin_width;
+        total_w += hist[b];
+        total_sum += center*hist[b];
     }
 
-    cutoff_val = (centroids[0] + centroids[1]) / 2; // Middle point of the cluster centers
-
-    free(labels);
-    
-    return cutoff_val;
+    double left_w = 0, left_sum = 0, best_score = -1, best_edge = min_t;
+    for(size_t b=0;b<NUM_BINS-1;b++){
+        double center = min_t + (b+0.5)*bin_width;
+        left_w += hist[b];
+        left_sum += center*hist[b];
+        double right_w = total_w - left_w;
+        if(left_w == 0 || right_w == 0) continue;
+        double mean_left = left_sum/left_w;
+        double mean_right = (total_sum-left_sum)/right_w;
+        double score = left_w*right_w*(mean_left-mean_right)*(mean_left-mean_right);
+        if(score > best_score){
+            best_score = score;
+            best_edge = min_t + (b+1)*bin_width;
+        }
+    }
+    return (size_t)best_edge;
 }
+
 
 
 //-----------------------------------------------------------------
