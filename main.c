@@ -81,12 +81,15 @@ void find_bank_bits(char* buf, size_t limit){
         if (best_t > limit) break;
     }
 
-    unsigned long mask = 0;
+    size_t bank_bits = 0;
     for (size_t b = 6; b < 30; b++) {
-        char* test = (char*)((uintptr_t)conflict ^ (1ULL << b));
-        if (time_accesses(base, test, ROUNDS) < limit) mask |= (1ULL << b);
+        size_t bit = (1ULL << b);
+        char* test = (char*)((size_t)conflict ^ bit);
+        if (time_accesses(base, test, ROUNDS) < limit){
+            bank_bits |= (1ULL << b);
+        }
     }
-    printf("0x%lx\n", mask);
+    printf("0x%lx\n", bank_bits);
 }
 
 
@@ -98,7 +101,7 @@ void find_bank_bits(char* buf, size_t limit){
  *  to figure out a cutoff value to detect bank hits from bank
  *  conflicts.
  * */
-#define SAMPLES 20000
+#define SAMPLES 1000
 #define NUM_BINS 512
 
 size_t detect_cutoff(char* buf){
